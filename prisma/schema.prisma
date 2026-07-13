@@ -1,0 +1,210 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  LOAN_OFFICER
+  MANAGER
+}
+
+enum LoanStatus {
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  DISBURSED
+  COMPLETED
+  DEFAULTED
+}
+
+enum PaymentStatus {
+  PAID
+  UNPAID
+  OVERDUE
+}
+
+enum PaymentMethod {
+  BANK_TRANSFER
+  CASH
+  CHEQUE
+  ONLINE
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  APPROVE
+  REJECT
+  DISBURSE
+  LOGIN
+}
+
+enum PaymentRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model User {
+  id            String            @id @default(uuid())
+  email         String            @unique
+  name          String
+  password      String
+  role          Role              @default(LOAN_OFFICER)
+  isActive      Boolean           @default(true)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  auditLogs     AuditLog[]
+  reviewedLoans LoanApplication[] @relation("LoanReviewer")
+  reviewedPaymentRequests PaymentRequest[] @relation("PaymentReviewer")
+}
+
+model Borrower {
+  id            String            @id @default(uuid())
+  firstName     String
+  lastName      String
+  email         String            @unique
+  phone         String
+  address       String
+  password      String            // hashed password for portal login
+  nin           String?           @unique  // National Identification Number
+  occupation    String?
+  employer      String?
+  monthlyIncome Decimal           @db.Decimal(15, 2)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  loans         LoanApplication[]
+  paymentRequests PaymentRequest[]
+}
+
+model Property {
+  id              String            @id @default(uuid())
+  title           String            // e.g. "3BR Apartment at Victoria Island"
+  address         String
+  type            String            // e.g. "Apartment", "Detached House", "Land"
+  currentValue    Decimal           @db.Decimal(15, 2)
+  documents       String?           // path to uploaded documents
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  loans           LoanApplication[]
+}
+
+model MortgagePackage {
+  id                String            @id @default(uuid())
+  name              String            // e.g. "Home Starter Plan"
+  description       String?           // brief description
+  interestRate      Decimal           @db.Decimal(5, 2)  // annual rate %
+  maxAmount         Decimal           @db.Decimal(15, 2) // max mortgage amount
+  minDownPayment    Int               // down payment percentage (e.g., 20)
+  defaultTermMonths Int               // default term in months
+  isActive          Boolean           @default(true)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  loans             LoanApplication[]
+}
+
+model LoanApplication {
+  id              String               @id @default(uuid())
+  borrowerId      String
+  borrower        Borrower             @relation(fields: [borrowerId], references: [id])
+  propertyId      String?
+  property        Property?            @relation(fields: [propertyId], references: [id])
+  packageId       String?
+  package         MortgagePackage?     @relation(fields: [packageId], references: [id])
+  loanAmount        Decimal              @db.Decimal(15, 2)
+  interestRate      Decimal              @db.Decimal(5, 2)  // annual rate in %
+  loanTermMonths    Int                  // total months
+  monthlyPayment    Decimal              @db.Decimal(15, 2) // calculated
+  totalPayable      Decimal              @db.Decimal(15, 2) // calculated
+  downPaymentPercent Decimal?             @db.Decimal(5, 2) // down payment percentage from package
+  propertyValue     Decimal?             @db.Decimal(15, 2) // original property value before down payment
+  purpose           String?
+  status          LoanStatus           @default(PENDING)
+  reviewedBy      String?
+  reviewer        User?                @relation("LoanReviewer", fields: [reviewedBy], references: [id])
+  reviewedAt      DateTime?
+  reviewComments  String?
+  approvedAt      DateTime?
+  disbursedAt     DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  repayments      Repayment[]
+  amortizationSchedule AmortizationSchedule[]
+  paymentRequests PaymentRequest[]
+  @@index([borrowerId])
+  @@index([status])
+}
+
+model Repayment {
+  id              String               @id @default(uuid())
+  loanId          String
+  loan            LoanApplication      @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  amountPaid      Decimal              @db.Decimal(15, 2)
+  principalAmount Decimal              @db.Decimal(15, 2)
+  interestAmount  Decimal              @db.Decimal(15, 2)
+  paymentMethod   PaymentMethod
+  paymentDate     DateTime             @default(now())
+  receiptNumber   String?
+  notes           String?
+  createdAt       DateTime             @default(now())
+  @@index([loanId])
+}
+
+model AmortizationSchedule {
+  id              String               @id @default(uuid())
+  loanId          String
+  loan            LoanApplication      @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  installmentNo   Int                  // 1, 2, 3... n
+  dueDate         DateTime
+  paymentAmount   Decimal              @db.Decimal(15, 2)
+  principalAmount Decimal              @db.Decimal(15, 2)
+  interestAmount  Decimal              @db.Decimal(15, 2)
+  balanceAfter    Decimal              @db.Decimal(15, 2)
+  status          PaymentStatus        @default(UNPAID)
+  paidDate        DateTime?
+  createdAt       DateTime             @default(now())
+  @@index([loanId])
+  @@unique([loanId, installmentNo])
+}
+
+model PaymentRequest {
+  id              String               @id @default(uuid())
+  borrowerId      String
+  borrower        Borrower             @relation(fields: [borrowerId], references: [id])
+  loanId          String
+  loan            LoanApplication      @relation(fields: [loanId], references: [id])
+  amount          Decimal              @db.Decimal(15, 2)
+  reference       String               // payment reference/transaction ID
+  status          PaymentRequestStatus @default(PENDING)
+  reviewedBy      String?
+  reviewer        User?                @relation("PaymentReviewer", fields: [reviewedBy], references: [id])
+  reviewedAt      DateTime?
+  reviewComments  String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  @@index([borrowerId])
+  @@index([loanId])
+  @@index([status])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  action    AuditAction
+  entity    String   // e.g. "Borrower", "LoanApplication"
+  entityId  String?
+  details   String?  // JSON string of changes
+  ip        String?
+  createdAt DateTime @default(now())
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
